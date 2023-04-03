@@ -148,8 +148,7 @@ class RMSNorm(nn.Module):
 
     def _compute_rms_sq(self, x, axes):
         x = jnp.asarray(x, jnp.promote_types(jnp.float32, jnp.result_type(x)))
-        rms_sq = jnp.mean(jax.lax.square(x), axes)
-        return rms_sq
+        return jnp.mean(jax.lax.square(x), axes)
 
     def _normalize(
         self,
@@ -971,13 +970,14 @@ class FlaxBartEncoderLayerCollection(nn.Module):
             all_self_attns,
         ]
 
-        if not return_dict:
-            return tuple(v for v in outputs if v is not None)
-
-        return FlaxBaseModelOutput(
-            last_hidden_state=hidden_states,
-            hidden_states=all_hidden_states,
-            attentions=all_self_attns,
+        return (
+            FlaxBaseModelOutput(
+                last_hidden_state=hidden_states,
+                hidden_states=all_hidden_states,
+                attentions=all_self_attns,
+            )
+            if return_dict
+            else tuple(v for v in outputs if v is not None)
         )
 
 
@@ -1103,14 +1103,15 @@ class FlaxBartDecoderLayerCollection(nn.Module):
             all_cross_attentions,
         ]
 
-        if not return_dict:
-            return tuple(v for v in outputs if v is not None)
-
-        return FlaxBaseModelOutputWithPastAndCrossAttentions(
-            last_hidden_state=hidden_states,
-            hidden_states=all_hidden_states,
-            attentions=all_self_attns,
-            cross_attentions=all_cross_attentions,
+        return (
+            FlaxBaseModelOutputWithPastAndCrossAttentions(
+                last_hidden_state=hidden_states,
+                hidden_states=all_hidden_states,
+                attentions=all_self_attns,
+                cross_attentions=all_cross_attentions,
+            )
+            if return_dict
+            else tuple(v for v in outputs if v is not None)
         )
 
 
@@ -1194,13 +1195,14 @@ class FlaxBartEncoder(nn.Module):
         else:
             final_output = self.final_ln(outputs[0])
 
-        if not return_dict:
-            return (final_output,) + outputs[1:]
-
-        return FlaxBaseModelOutput(
-            last_hidden_state=final_output,
-            hidden_states=outputs.hidden_states,
-            attentions=outputs.attentions,
+        return (
+            FlaxBaseModelOutput(
+                last_hidden_state=final_output,
+                hidden_states=outputs.hidden_states,
+                attentions=outputs.attentions,
+            )
+            if return_dict
+            else (final_output,) + outputs[1:]
         )
 
 
@@ -1291,14 +1293,15 @@ class FlaxBartDecoder(nn.Module):
         else:
             final_output = self.final_ln(outputs[0])
 
-        if not return_dict:
-            return (final_output,) + outputs[1:]
-
-        return FlaxBaseModelOutputWithPastAndCrossAttentions(
-            last_hidden_state=final_output,
-            hidden_states=outputs.hidden_states,
-            attentions=outputs.attentions,
-            cross_attentions=outputs.cross_attentions,
+        return (
+            FlaxBaseModelOutputWithPastAndCrossAttentions(
+                last_hidden_state=final_output,
+                hidden_states=outputs.hidden_states,
+                attentions=outputs.attentions,
+                cross_attentions=outputs.cross_attentions,
+            )
+            if return_dict
+            else (final_output,) + outputs[1:]
         )
 
 
@@ -1383,18 +1386,18 @@ class FlaxBartForConditionalGenerationModule(FlaxBartForConditionalGenerationMod
         else:
             lm_logits = self.lm_head(hidden_states)
 
-        if not return_dict:
-            output = (lm_logits,) + outputs[1:]
-            return output
-
-        return FlaxSeq2SeqLMOutput(
-            logits=lm_logits,
-            decoder_hidden_states=outputs.decoder_hidden_states,
-            decoder_attentions=outputs.decoder_attentions,
-            cross_attentions=outputs.cross_attentions,
-            encoder_last_hidden_state=outputs.encoder_last_hidden_state,
-            encoder_hidden_states=outputs.encoder_hidden_states,
-            encoder_attentions=outputs.encoder_attentions,
+        return (
+            FlaxSeq2SeqLMOutput(
+                logits=lm_logits,
+                decoder_hidden_states=outputs.decoder_hidden_states,
+                decoder_attentions=outputs.decoder_attentions,
+                cross_attentions=outputs.cross_attentions,
+                encoder_last_hidden_state=outputs.encoder_last_hidden_state,
+                encoder_hidden_states=outputs.encoder_hidden_states,
+                encoder_attentions=outputs.encoder_attentions,
+            )
+            if return_dict
+            else (lm_logits,) + outputs[1:]
         )
 
 
@@ -1590,11 +1593,12 @@ class DalleBart(PretrainedFromWandbMixin, FlaxBartForConditionalGeneration):
             outputs = (lm_logits,) + decoder_outputs[1:]
 
         # add updated cache to model output
-        if past_key_values is not None and return_dict:
-            outputs["past_key_values"] = unfreeze(past["cache"])
-            return outputs
-        elif past_key_values is not None and not return_dict:
-            outputs = outputs[:1] + (unfreeze(past["cache"]),) + outputs[1:]
+        if past_key_values is not None:
+            if return_dict:
+                outputs["past_key_values"] = unfreeze(past["cache"])
+                return outputs
+            elif not return_dict:
+                outputs = outputs[:1] + (unfreeze(past["cache"]),) + outputs[1:]
 
         return outputs
 
@@ -1675,9 +1679,7 @@ class DalleBart(PretrainedFromWandbMixin, FlaxBartForConditionalGeneration):
             eos_token_id if eos_token_id is not None else self.config.eos_token_id
         )
         decoder_start_token_id = (
-            decoder_start_token_id
-            if decoder_start_token_id
-            else self.config.decoder_start_token_id
+            decoder_start_token_id or self.config.decoder_start_token_id
         )
         prng_key = prng_key if prng_key is not None else jax.random.PRNGKey(0)
 
@@ -1946,11 +1948,11 @@ class DalleBart(PretrainedFromWandbMixin, FlaxBartForConditionalGeneration):
         if input_ids.shape[1] > 1:
             state = sample_search_body_fn(state)
 
-        if not trace:
-            state = self._run_loop_in_debug(
+        state = (
+            lax.while_loop(sample_search_cond_fn, sample_search_body_fn, state)
+            if trace
+            else self._run_loop_in_debug(
                 sample_search_cond_fn, sample_search_body_fn, state
             )
-        else:
-            state = lax.while_loop(sample_search_cond_fn, sample_search_body_fn, state)
-
+        )
         return FlaxSampleOutput(sequences=state.sequences)
